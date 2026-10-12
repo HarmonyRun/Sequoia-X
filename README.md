@@ -32,6 +32,16 @@ python main.py --update-only # 仅回填当日最新行情
 
 项目已提供原生 Python FPK，可通过飞牛应用中心手动安装，无需 Docker。管理页包含概览、选股结果、AI 分析和设置，可管理数据源、回填日期、定时任务、飞书 Webhook，以及 OpenAI 兼容大模型的 Base URL、模型和 API Key。SQLite 数据、结果历史、配置和日志均持久化保存。
 
+### Web 控制台预览
+
+概览页：查看任务状态、行情数据统计、运行日志，并可手动执行选股、当日更新和历史回填。
+
+![Sequoia-X fnOS 控制台概览](docs/images/fnos-dashboard-overview.png)
+
+设置页：管理数据源、自动运行时间、飞书通知和 OpenAI 兼容大模型。
+
+![Sequoia-X fnOS 控制台设置](docs/images/fnos-dashboard-settings.png)
+
 ```bash
 ./fnos/build-fpk.sh
 ```

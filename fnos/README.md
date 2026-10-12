@@ -29,6 +29,12 @@
 
 Web 控制台的“设置”页可随时更换飞书 Webhook，或配置任意 OpenAI 兼容大模型的 Base URL、API Key、模型名和补充提示词。API Key、管理密码和 Webhook 保存在权限为 `0600` 的应用私有配置文件中，管理 API 只返回是否已配置，不回显原文。
 
+## 界面预览
+
+![控制台概览](../docs/images/fnos-dashboard-overview.png)
+
+![控制台设置](../docs/images/fnos-dashboard-settings.png)
+
 默认管理页端口为 `18188`。系统使用交易日历判断是否开市，并在北京时间 `16:00`（收盘后一小时）补齐最新行情；数据源和运行时间均可在安装或应用配置向导中修改。卸载时可选择保留或删除数据库和日志。
 
 版本 2.3.3 适用于 x86_64、fnOS 1.2.0800、Python 3.12.4。桌面入口显式使用 HTTP，避免从启用 HTTPS 的 fnOS 面板打开时错误继承为 HTTPS。
