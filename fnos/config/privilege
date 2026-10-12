@@ -1,0 +1,7 @@
+{
+  "defaults": {
+    "run-as": "package"
+  },
+  "username": "fn-sequoia-x",
+  "groupname": "fn-sequoia-x"
+}

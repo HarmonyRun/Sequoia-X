@@ -37,30 +37,13 @@ class FeishuNotifier:
             return f"BJ{code}"
         return f"SZ{code}"
 
-    @staticmethod
-    def _get_stock_names(symbols: list[str]) -> dict[str, str]:
-        """通过 baostock 批量查询股票名称，返回 {code: name} 映射。"""
-        import baostock as bs
-        bs.login()
-        mapping = {}
-        for code in symbols:
-            prefix = "sh" if code.startswith(("6", "9")) else "sz"
-            rs = bs.query_stock_basic(code=f"{prefix}.{code}")
-            while rs.next():
-                row = rs.get_row_data()
-                mapping[code] = row[1]  # 第2个字段是股票名称
-        bs.logout()
-        return mapping
-
     def _build_card(self, symbols: list[str], strategy_name: str) -> dict:
         today = date.today().strftime("%Y-%m-%d")
-        names = self._get_stock_names(symbols)
 
         links: list[str] = []
         for code in symbols:
             xq_code = self._to_xueqiu_code(code)
-            name = names.get(code, xq_code)
-            links.append(f"[{name}](https://xueqiu.com/S/{xq_code})")
+            links.append(f"[{code}](https://xueqiu.com/S/{xq_code})")
 
         symbol_text = " ".join(links) if links else "（无选股结果）"
 
@@ -79,7 +62,10 @@ class FeishuNotifier:
                         "tag": "div",
                         "text": {
                             "tag": "lark_md",
-                            "content": f"**日期：** {today}\n**策略：** {strategy_name}\n**选股数量：** {len(symbols)}",
+                            "content": (
+                                f"**日期：** {today}\n**策略：** {strategy_name}\n"
+                                f"**选股数量：** {len(symbols)}"
+                            ),
                         },
                     },
                     {"tag": "hr"},
@@ -99,7 +85,7 @@ class FeishuNotifier:
         symbols: list[str],
         strategy_name: str,
         webhook_key: str = "default",
-    ) -> None:
+    ) -> bool:
         """
         将选股结果格式化为飞书卡片消息并 POST 至对应 Webhook。
 
@@ -115,6 +101,9 @@ class FeishuNotifier:
             不抛出异常，HTTP 失败时记录 ERROR 日志。
         """
         url = self.settings.get_webhook_url(webhook_key)
+        if not url:
+            logger.info("未配置飞书 Webhook，跳过推送")
+            return False
         payload = self._build_card(symbols, strategy_name)
 
         try:
@@ -135,6 +124,47 @@ class FeishuNotifier:
                 )
             else:
                 logger.info(f"飞书推送成功 [{webhook_key}]，共 {len(symbols)} 只股票")
+                return True
 
         except requests.RequestException as exc:
             logger.error(f"飞书推送请求异常 [{webhook_key}]：{exc}")
+        return False
+
+    def send_analysis(self, analysis: str, summary: str = "") -> bool:
+        """Push the consolidated AI report to the default Feishu webhook."""
+        url = self.settings.feishu_webhook_url
+        if not url:
+            logger.info("未配置飞书 Webhook，跳过 AI 分析推送")
+            return False
+        content = analysis[:18000]
+        payload = {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {"tag": "plain_text", "content": "🤖 Sequoia-X AI 选股分析"},
+                    "template": "green",
+                },
+                "elements": [
+                    {
+                        "tag": "div",
+                        "text": {
+                            "tag": "lark_md",
+                            "content": (
+                                f"{summary}\n\n{content}\n\n"
+                                "*仅供研究参考，不构成投资建议。*"
+                            ),
+                        },
+                    }
+                ],
+            },
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=15)
+            body = response.json()
+            ok = response.status_code == 200 and body.get("code") == 0
+            if not ok:
+                logger.error(f"飞书 AI 分析推送失败：HTTP={response.status_code} {response.text}")
+            return ok
+        except (requests.RequestException, ValueError) as exc:
+            logger.error(f"飞书 AI 分析推送异常：{exc}")
+            return False

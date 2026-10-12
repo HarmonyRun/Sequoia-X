@@ -1115,7 +1115,7 @@ wheels = [
 [[package]]
 name = "sequoia-x"
 version = "2.0.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "akshare" },
     { name = "baostock" },

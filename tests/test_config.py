@@ -1,10 +1,8 @@
 """配置管理属性测试。"""
 
 import os
-import pytest
 from hypothesis import given, settings as h_settings, HealthCheck
 from hypothesis import strategies as st
-from pydantic import ValidationError
 
 
 # Feature: sequoia-x-v2, Property 1: 环境变量覆盖配置默认值
@@ -21,17 +19,15 @@ def test_env_overrides_default(db_path: str, monkeypatch) -> None:
     assert s.db_path == db_path
 
 
-# Feature: sequoia-x-v2, Property 2: 缺失必填字段触发 ValidationError
-def test_missing_required_field_raises() -> None:
-    """属性 2：缺少 feishu_webhook_url 时，实例化 Settings 应抛出 ValidationError。"""
+# Feature: sequoia-x-v2, Property 2: 飞书配置可选
+def test_missing_webhook_disables_notification() -> None:
+    """未配置 Webhook 时仍可运行，并由通知器安全跳过推送。"""
     import os
     from sequoia_x.core.config import Settings
     # 确保环境变量中没有该字段
     env_backup = os.environ.pop("FEISHU_WEBHOOK_URL", None)
     try:
-        with pytest.raises(ValidationError) as exc_info:
-            Settings(_env_file=None)
-        assert "feishu_webhook_url" in str(exc_info.value).lower()
+        assert Settings(_env_file=None).feishu_webhook_url == ""
     finally:
         if env_backup is not None:
             os.environ["FEISHU_WEBHOOK_URL"] = env_backup

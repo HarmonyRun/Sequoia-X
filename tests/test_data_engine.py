@@ -6,7 +6,8 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-from hypothesis import given, settings as h_settings
+from hypothesis import given
+from hypothesis import settings as h_settings
 from hypothesis import strategies as st
 
 from sequoia_x.core.config import Settings
@@ -51,3 +52,59 @@ def test_unique_symbol_date_constraint(symbol: str, trade_date: date) -> None:
                 (symbol, str(trade_date)),
             ).fetchone()[0]
         assert count == 1
+
+
+def test_provider_change_replaces_full_symbol_history(monkeypatch) -> None:
+    """Changing provider must not splice incompatible adjusted-price series."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        engine, _ = make_engine_in(tmp_dir)
+        with sqlite3.connect(engine.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO stock_daily
+                    (symbol, date, open, high, low, close, volume, turnover)
+                VALUES ('000001', '2024-01-02', 1, 1, 1, 1, 100, 100)
+                """
+            )
+            conn.commit()
+
+        class FakePool:
+            active_name = "tencent"
+
+            def __init__(self, *_args, **_kwargs) -> None:
+                self.calls: list[tuple[str, str]] = []
+
+            def fetch(self, _symbol: str, start: str, end: str):
+                self.calls.append((start, end))
+                frame = pd.DataFrame(
+                    [
+                        {
+                            "date": "2024-01-03",
+                            "open": 20,
+                            "high": 21,
+                            "low": 19,
+                            "close": 20,
+                            "volume": 200,
+                            "turnover": 2000,
+                        }
+                    ]
+                )
+                return frame, "tencent", []
+
+            def close(self) -> None:
+                return
+
+        monkeypatch.setattr("sequoia_x.data.engine.ProviderPool", FakePool)
+        engine.data_request_interval = 0
+        result = engine.backfill(["000001"])
+
+        assert result["rows"] == 1
+        with sqlite3.connect(engine.db_path) as conn:
+            rows = conn.execute(
+                "SELECT date, close FROM stock_daily WHERE symbol='000001' ORDER BY date"
+            ).fetchall()
+            source = conn.execute(
+                "SELECT source FROM stock_sync_state WHERE symbol='000001'"
+            ).fetchone()[0]
+        assert rows == [("2024-01-03", 20.0)]
+        assert source == "tencent"

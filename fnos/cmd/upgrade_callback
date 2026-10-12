@@ -1,0 +1,12 @@
+#!/bin/bash
+
+PYTHON="/var/apps/python312/target/bin/python3"
+APP_DIR="${TRIM_APPDEST}/server"
+
+PYTHONPATH="${APP_DIR}/vendor:${APP_DIR}" "${PYTHON}" -c \
+    "import akshare, pandas, pydantic, baostock, sequoia_x.service, sequoia_x.data.providers" || {
+    echo "Sequoia-X 升级后依赖校验失败。" >"${TRIM_TEMP_LOGFILE}"
+    exit 1
+}
+
+exit 0

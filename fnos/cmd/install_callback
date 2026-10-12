@@ -1,0 +1,19 @@
+#!/bin/bash
+
+PYTHON="/var/apps/python312/target/bin/python3"
+APP_DIR="${TRIM_APPDEST}/server"
+
+mkdir -p "${TRIM_PKGVAR}/data" "${TRIM_PKGVAR}/logs"
+
+if [ ! -x "${PYTHON}" ]; then
+    echo "Python 3.12 运行时不可用，请确认依赖应用 python312 已安装。" >"${TRIM_TEMP_LOGFILE}"
+    exit 1
+fi
+
+PYTHONPATH="${APP_DIR}/vendor:${APP_DIR}" "${PYTHON}" -c \
+    "import akshare, pandas, pydantic, baostock, sequoia_x.service, sequoia_x.data.providers" || {
+    echo "Sequoia-X 原生依赖校验失败。" >"${TRIM_TEMP_LOGFILE}"
+    exit 1
+}
+
+exit 0

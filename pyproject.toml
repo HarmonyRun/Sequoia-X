@@ -1,6 +1,6 @@
 [project]
 name = "sequoia-x"
-version = "2.0.0"
+version = "2.3.3"
 requires-python = ">=3.10"
 dependencies = [
     "akshare>=1.10",
@@ -18,6 +18,22 @@ dev = [
     "hypothesis>=6.100",
     "pytest-mock>=3.12",
 ]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+    "sequoia_x",
+    "sequoia_x.core",
+    "sequoia_x.data",
+    "sequoia_x.notify",
+    "sequoia_x.strategy",
+]
+
+[tool.setuptools.package-data]
+sequoia_x = ["dashboard.html"]
 
 [tool.ruff]
 line-length = 100

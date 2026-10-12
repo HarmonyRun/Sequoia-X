@@ -1,0 +1,68 @@
+[
+  {
+    "stepTitle": "Sequoia-X 配置",
+    "items": [
+      {
+        "type": "text",
+        "field": "FEISHU_WEBHOOK_URL",
+        "label": "飞书机器人 Webhook",
+        "rules": [
+          { "required": true, "message": "请填写飞书 Webhook" },
+          { "pattern": "^https://open\\.feishu\\.cn/open-apis/bot/v2/hook/.+$", "message": "Webhook 格式不正确" }
+        ]
+      },
+      {
+        "type": "select",
+        "field": "DATA_SOURCE",
+        "label": "历史行情数据源",
+        "initValue": "auto",
+        "options": [
+          { "label": "自动切换（推荐）", "value": "auto" },
+          { "label": "东方财富", "value": "eastmoney" },
+          { "label": "腾讯证券", "value": "tencent" },
+          { "label": "新浪财经", "value": "sina" },
+          { "label": "Baostock", "value": "baostock" }
+        ],
+        "rules": [{ "required": true, "message": "请选择数据源" }]
+      },
+      {
+        "type": "text",
+        "field": "RUN_TIME",
+        "label": "收盘后自动更新运行时间",
+        "initValue": "16:00",
+        "rules": [
+          { "required": true, "message": "请输入运行时间" },
+          { "pattern": "^([01][0-9]|2[0-3]):[0-5][0-9]$", "message": "请使用 HH:MM 格式" }
+        ]
+      },
+      {
+        "type": "switch",
+        "field": "AUTO_BACKFILL",
+        "label": "数据库为空时自动回填",
+        "initValue": "true"
+      },
+      {
+        "type": "text",
+        "field": "START_DATE",
+        "label": "历史数据起始日期",
+        "initValue": "2024-01-01",
+        "rules": [{ "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "message": "请使用 YYYY-MM-DD 格式" }]
+      },
+      {
+        "type": "text",
+        "field": "DASHBOARD_USERNAME",
+        "label": "管理用户名",
+        "initValue": "admin"
+      },
+      {
+        "type": "password",
+        "field": "DASHBOARD_PASSWORD",
+        "label": "管理密码",
+        "rules": [
+          { "required": true, "message": "请输入管理密码" },
+          { "min": 8, "message": "密码至少 8 位" }
+        ]
+      }
+    ]
+  }
+]

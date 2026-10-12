@@ -1,12 +1,15 @@
 """数据引擎模块：负责 SQLite 行情数据存储与 baostock 增量同步。"""
 
 import sqlite3
+import time
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
 
 from sequoia_x.core.config import Settings
 from sequoia_x.core.logger import get_logger
+from sequoia_x.data.providers import AUTO_SOURCE_ORDER, ProviderError, ProviderPool
 
 logger = get_logger(__name__)
 
@@ -30,27 +33,13 @@ _CREATE_INDEX_SQL = """
 CREATE INDEX IF NOT EXISTS idx_symbol_date ON stock_daily (symbol, date);
 """
 
-
-def _bs_fetch_batch(tasks: list) -> list:
-    """多进程 worker：独立 login，批量拉取 baostock 数据。"""
-    import baostock as bs
-    bs.login()
-    results = []
-    for symbol, bs_code, start, end in tasks:
-        rs = bs.query_history_k_data_plus(
-            bs_code,
-            "date,open,high,low,close,volume,amount",
-            start_date=start,
-            end_date=end,
-            frequency="d",
-            adjustflag="1",  # 后复权
-        )
-        if rs.error_code != "0":
-            continue
-        while rs.next():
-            results.append([symbol] + rs.get_row_data())
-    bs.logout()
-    return results
+_CREATE_SYNC_STATE_SQL = """
+CREATE TABLE IF NOT EXISTS stock_sync_state (
+    symbol     TEXT PRIMARY KEY,
+    source     TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+"""
 
 
 class DataEngine:
@@ -59,6 +48,9 @@ class DataEngine:
     def __init__(self, settings: Settings) -> None:
         self.db_path: str = settings.db_path
         self.start_date: str = settings.start_date
+        self.data_source: str = settings.data_source.lower()
+        self.data_timeout: float = settings.data_timeout
+        self.data_request_interval: float = settings.data_request_interval
         self._init_db()
 
     def _init_db(self) -> None:
@@ -66,6 +58,7 @@ class DataEngine:
         with sqlite3.connect(self.db_path) as conn:
             conn.execute(_CREATE_TABLE_SQL)
             conn.execute(_CREATE_INDEX_SQL)
+            conn.execute(_CREATE_SYNC_STATE_SQL)
             conn.commit()
         logger.info(f"数据库初始化完成：{self.db_path}")
 
@@ -86,6 +79,13 @@ class DataEngine:
             )
         return df
 
+    def _get_symbol_source(self, symbol: str) -> str | None:
+        with sqlite3.connect(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT source FROM stock_sync_state WHERE symbol = ?", (symbol,)
+            ).fetchone()
+        return row[0] if row else None
+
     @staticmethod
     def _to_baostock_code(symbol: str) -> str:
         """将纯数字代码转为 baostock 格式：6/9开头 -> sh，其余 -> sz。"""
@@ -95,235 +95,177 @@ class DataEngine:
     # ── 数据同步 ──
 
     def sync_today_bulk(self) -> int:
-        """多进程并行通过 baostock 拉取增量数据（后复权），写入 SQLite。"""
-        from datetime import date, timedelta
-        from multiprocessing import Pool
+        """Fill every local symbol through today using the selected provider policy."""
+        symbols = self.get_local_symbols()
+        if not symbols:
+            logger.warning("本地无股票数据，请先执行历史回填")
+            return 0
+        result = self.backfill(symbols, incremental=True)
+        if result["failed"] and not result["success"] and not result["skipped"]:
+            raise RuntimeError("所有行情数据源均不可用，最新数据回填失败")
+        return result["rows"]
 
+    def backfill(self, symbols: list[str], *, incremental: bool = False) -> dict[str, int]:
+        """Backfill symbols, automatically continuing with another provider on failures."""
+        if not symbols:
+            raise RuntimeError("未获取到股票列表，无法开始回填")
         today_str = date.today().strftime("%Y-%m-%d")
-
-        tasks = []
-        with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute(
-                "SELECT symbol, MAX(date) FROM stock_daily GROUP BY symbol"
-            ).fetchall()
-
-        if not rows:
-            logger.warning("本地无股票数据，请先执行 --backfill")
-            return 0
-
-        for symbol, last_date in rows:
-            if last_date and last_date >= today_str:
-                continue
-            start = today_str
-            if last_date:
-                start = (date.fromisoformat(last_date) + timedelta(days=1)).strftime("%Y-%m-%d")
-            tasks.append((symbol, self._to_baostock_code(symbol), start, today_str))
-
-        if not tasks:
-            logger.info("所有股票已是最新，无需更新")
-            return 0
-
-        logger.info(f"需要更新 {len(tasks)} 只股票，启动多进程并行拉取...")
-
-        n_workers = min(8, len(tasks))
-        chunks = [tasks[i::n_workers] for i in range(n_workers)]
-
-        with Pool(n_workers) as pool:
-            batch_results = pool.map(_bs_fetch_batch, chunks)
-
-        all_rows = []
-        for batch in batch_results:
-            all_rows.extend(batch)
-
-        if not all_rows:
-            logger.info("无新数据（可能非交易日）")
-            return 0
-
-        df = pd.DataFrame(all_rows, columns=["symbol", "date", "open", "high", "low", "close", "volume", "turnover"])
-        for col in ["open", "high", "low", "close", "volume", "turnover"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        df = df.dropna(subset=["close"])
-        df = df[df["volume"] > 0]
-
-        count = len(df)
-        with sqlite3.connect(self.db_path) as conn:
-            for d in df["date"].unique().tolist():
-                conn.execute("DELETE FROM stock_daily WHERE date = ?", (d,))
-            df.to_sql("stock_daily", conn, if_exists="append", index=False, method="multi", chunksize=500)
-            conn.commit()
-
-        logger.info(f"sync_today_bulk: 写入 {count} 条数据")
-        return count
-
-    def backfill(self, symbols: list[str]) -> None:
-        """通过 baostock 批量回填历史日 K 线数据（后复权）。
-
-        容错机制：
-        - 单只股票失败自动重试 3 次，间隔递增（2s/4s/8s）
-        - 每 200 只股票自动重连 baostock（防止长连接超时）
-        - 已入库的自动 skip，中断后可重跑续传
-        """
-        import time
-        from datetime import date, timedelta
-
-        import baostock as bs
-
-        today_str = date.today().strftime("%Y-%m-%d")
-        max_retries = 3
-        reconnect_interval = 200  # 每处理 N 只股票重连一次
-
-        def _login():
-            lg = bs.login()
-            if lg.error_code != "0":
-                logger.error(f"baostock 登录失败: {lg.error_msg}")
-                return False
-            return True
-
-        if not _login():
-            return
-
-        success = 0
-        skipped = 0
-        failed = 0
-        since_reconnect = 0
-
+        pool = ProviderPool(self.data_source, self.data_timeout)
+        success = skipped = failed = written = 0
+        logger.info(
+            "数据源模式: %s；当前数据源: %s",
+            self.data_source,
+            pool.active_name,
+        )
         try:
-            for i, symbol in enumerate(symbols):
+            for index, symbol in enumerate(symbols, start=1):
                 last_date = self._get_last_date(symbol)
                 if last_date and last_date >= today_str:
                     skipped += 1
-                    if (i + 1) % 500 == 0:
-                        logger.info(
-                            f"已处理 {i + 1}/{len(symbols)}，"
-                            f"成功 {success} 跳过 {skipped} 失败 {failed}"
-                        )
                     continue
-
-                # 定期重连，防止长连接超时
-                since_reconnect += 1
-                if since_reconnect >= reconnect_interval:
-                    bs.logout()
-                    time.sleep(1)
-                    if not _login():
-                        logger.error("重连失败，终止回填")
-                        return
-                    since_reconnect = 0
-
                 start = last_date or self.start_date
                 if last_date:
-                    start = (date.fromisoformat(last_date) + timedelta(days=1)).strftime("%Y-%m-%d")
-
-                bs_code = self._to_baostock_code(symbol)
-
-                # 带重试的查询
-                rows = []
-                query_ok = False
-                for attempt in range(max_retries):
-                    try:
-                        rs = bs.query_history_k_data_plus(
-                            bs_code,
-                            "date,open,high,low,close,volume,amount",
-                            start_date=start,
-                            end_date=today_str,
-                            frequency="d",
-                            adjustflag="1",  # 后复权
-                        )
-
-                        if rs.error_code != "0":
-                            raise RuntimeError(rs.error_msg)
-
-                        rows = []
-                        while rs.next():
-                            rows.append(rs.get_row_data())
-                        query_ok = True
-                        break
-
-                    except Exception as exc:
-                        if attempt < max_retries - 1:
-                            wait = 2 ** (attempt + 1)
-                            logger.warning(
-                                f"[{symbol}] 第{attempt + 1}次失败: {exc}，{wait}s 后重试"
-                            )
-                            time.sleep(wait)
-                            # 重连 baostock
-                            bs.logout()
-                            time.sleep(1)
-                            _login()
-                        else:
-                            logger.warning(f"[{symbol}] {max_retries}次重试均失败，跳过")
-
-                if not query_ok:
-                    failed += 1
-                    continue
-
-                if not rows:
-                    skipped += 1
-                    continue
-
-                df = pd.DataFrame(rows, columns=rs.fields)
-                for col in ["open", "high", "low", "close", "volume", "amount"]:
-                    df[col] = pd.to_numeric(df[col], errors="coerce")
-                df = df.dropna(subset=["close"])
-                df = df[df["volume"] > 0]
-
-                if df.empty:
-                    skipped += 1
-                    continue
-
-                df["symbol"] = symbol
-                df = df.rename(columns={"amount": "turnover"})
-                df = df[["symbol", "date", "open", "high", "low", "close", "volume", "turnover"]]
-
-                try:
-                    with sqlite3.connect(self.db_path) as conn:
-                        df.to_sql(
-                            "stock_daily", conn, if_exists="append",
-                            index=False, method="multi", chunksize=500,
-                        )
-                except sqlite3.IntegrityError:
-                    pass
-
-                success += 1
-
-                if (i + 1) % 500 == 0:
-                    logger.info(
-                        f"已处理 {i + 1}/{len(symbols)}，"
-                        f"成功 {success} 跳过 {skipped} 失败 {failed}"
+                    start = (date.fromisoformat(last_date) + timedelta(days=1)).strftime(
+                        "%Y-%m-%d"
                     )
-
+                try:
+                    frame, source, errors = pool.fetch(symbol, start, today_str)
+                    for error in errors:
+                        logger.warning("[%s] 数据源异常，自动切换: %s", symbol, error)
+                    previous_source = self._get_symbol_source(symbol)
+                    replace_history = bool(last_date and previous_source != source)
+                    if replace_history and not frame.empty:
+                        logger.info(
+                            "[%s] 数据源由 %s 切换为 %s，重新拉取完整区间以保持复权一致",
+                            symbol,
+                            previous_source or "未知",
+                            source,
+                        )
+                        frame, source, additional_errors = pool.fetch(
+                            symbol, self.start_date, today_str
+                        )
+                        for error in additional_errors:
+                            logger.warning("[%s] 完整区间切源: %s", symbol, error)
+                    if frame.empty:
+                        skipped += 1
+                    else:
+                        rows = [
+                            (symbol, *row)
+                            for row in frame[
+                                ["date", "open", "high", "low", "close", "volume", "turnover"]
+                            ].itertuples(index=False, name=None)
+                        ]
+                        with sqlite3.connect(self.db_path) as conn:
+                            if replace_history:
+                                conn.execute("DELETE FROM stock_daily WHERE symbol = ?", (symbol,))
+                            conn.executemany(
+                                """
+                                INSERT INTO stock_daily
+                                    (symbol, date, open, high, low, close, volume, turnover)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                ON CONFLICT(symbol, date) DO UPDATE SET
+                                    open=excluded.open, high=excluded.high, low=excluded.low,
+                                    close=excluded.close, volume=excluded.volume,
+                                    turnover=excluded.turnover
+                                """,
+                                rows,
+                            )
+                            conn.execute(
+                                """
+                                INSERT INTO stock_sync_state (symbol, source, updated_at)
+                                VALUES (?, ?, CURRENT_TIMESTAMP)
+                                ON CONFLICT(symbol) DO UPDATE SET
+                                    source=excluded.source,
+                                    updated_at=CURRENT_TIMESTAMP
+                                """,
+                                (symbol, source),
+                            )
+                            conn.commit()
+                        success += 1
+                        written += len(rows)
+                        logger.debug("[%s] %s 写入 %d 条", symbol, source, len(rows))
+                except ProviderError as exc:
+                    failed += 1
+                    logger.warning("[%s] 所有可用数据源均失败: %s", symbol, exc)
+                if index % (200 if incremental else 100) == 0:
+                    logger.info(
+                        "已处理 %d/%d，成功 %d 跳过 %d 失败 %d，当前源 %s",
+                        index,
+                        len(symbols),
+                        success,
+                        skipped,
+                        failed,
+                        pool.active_name,
+                    )
+                if self.data_request_interval > 0:
+                    time.sleep(self.data_request_interval)
         finally:
-            bs.logout()
-
-        logger.info(f"回填完成 — 成功: {success} | 跳过: {skipped} | 失败: {failed}")
+            pool.close()
+        logger.info(
+            "回填完成 — 写入: %d | 成功: %d | 跳过: %d | 失败: %d",
+            written,
+            success,
+            skipped,
+            failed,
+        )
+        return {"rows": written, "success": success, "skipped": skipped, "failed": failed}
 
     # ── 股票列表 ──
 
     def get_all_symbols(self) -> list[str]:
-        """通过 baostock 获取全市场 A 股代码列表。"""
-        import baostock as bs
+        """Discover the A-share universe with independent source fallbacks."""
+        import akshare as ak
 
-        lg = bs.login()
-        if lg.error_code != "0":
-            logger.error(f"baostock 登录失败: {lg.error_msg}")
-            return []
+        errors: list[str] = []
+        order = (self.data_source,) if self.data_source != "auto" else AUTO_SOURCE_ORDER
+        # Tencent has no whole-market symbol-list endpoint; use independent list sources.
+        list_sources = list(dict.fromkeys((*order, "eastmoney", "sina", "baostock")))
+        for source in list_sources:
+            try:
+                if source in {"eastmoney", "tencent"}:
+                    frame = ak.stock_info_a_code_name()
+                    column = "code" if "code" in frame.columns else "代码"
+                    symbols = frame[column].astype(str).str.zfill(6).tolist()
+                elif source == "sina":
+                    frame = ak.stock_zh_a_spot()
+                    column = "代码" if "代码" in frame.columns else "code"
+                    symbols = frame[column].astype(str).str[-6:].tolist()
+                else:
+                    import socket
 
-        try:
-            rs = bs.query_stock_basic(code_name="", code="")
-            symbols = []
-            while rs.next():
-                row = rs.get_row_data()
-                code = row[0]           # "sh.600000" or "sz.000001"
-                status = row[4]         # "1" = 上市
-                stock_type = row[5]     # "1" = 股票
-                if status == "1" and stock_type == "1":
-                    symbols.append(code.split(".")[1])  # 提取纯数字代码
-            logger.info(f"获取股票列表完成，共 {len(symbols)} 只")
-            return symbols
-        except Exception as e:
-            logger.error(f"获取股票列表失败: {e}")
-            return []
-        finally:
-            bs.logout()
+                    import baostock as bs
+
+                    socket.setdefaulttimeout(self.data_timeout)
+                    login = bs.login()
+                    if login.error_code != "0":
+                        raise RuntimeError(login.error_msg)
+                    try:
+                        result = bs.query_stock_basic(code_name="", code="")
+                        symbols = []
+                        while result.next():
+                            row = result.get_row_data()
+                            if row[4] == "1" and row[5] == "1":
+                                symbols.append(row[0].split(".")[1])
+                    finally:
+                        bs.logout()
+                symbols = sorted(
+                    {
+                        symbol
+                        for symbol in symbols
+                        if len(symbol) == 6 and symbol.isdigit()
+                    }
+                )
+                if symbols:
+                    logger.info("通过 %s 获取股票列表，共 %d 只", source, len(symbols))
+                    return symbols
+            except Exception as exc:
+                errors.append(f"{source}: {exc}")
+                logger.warning("股票列表源 %s 不可用: %s", source, exc)
+        local = self.get_local_symbols()
+        if local:
+            logger.warning("远程股票列表不可用，使用本地缓存的 %d 只股票", len(local))
+            return local
+        raise RuntimeError("无法获取股票列表: " + " | ".join(errors))
 
     def get_local_symbols(self) -> list[str]:
         with sqlite3.connect(self.db_path) as conn:

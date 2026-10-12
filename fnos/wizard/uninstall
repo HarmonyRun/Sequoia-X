@@ -1,0 +1,18 @@
+[
+  {
+    "stepTitle": "卸载 Sequoia-X",
+    "items": [
+      {
+        "type": "radio",
+        "field": "wizard_data_action",
+        "label": "行情数据库和日志",
+        "initValue": "keep",
+        "options": [
+          { "label": "保留数据，重新安装后可继续使用（推荐）", "value": "keep" },
+          { "label": "永久删除全部数据", "value": "delete" }
+        ],
+        "rules": [{ "required": true, "message": "请选择数据处理方式" }]
+      }
+    ]
+  }
+]

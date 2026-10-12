@@ -1,13 +1,27 @@
 """配置管理模块：通过 pydantic-settings 从环境变量或 .env 文件加载系统配置。"""
 
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     db_path: str = "data/sequoia_v2.db"
     start_date: str = "2024-01-01"
-    feishu_webhook_url: str  # 必填字段，缺失时抛出 ValidationError
+    data_source: Literal["auto", "eastmoney", "tencent", "sina", "baostock"] = "auto"
+    data_timeout: float = 60.0
+    data_request_interval: float = 0.15
+    feishu_webhook_url: str = ""
     strategy_webhooks: dict[str, str] = {}
+    push_strategy_results: bool = True
+    push_ai_analysis: bool = True
+    llm_enabled: bool = False
+    llm_base_url: str = "https://api.openai.com/v1"
+    llm_api_key: str = ""
+    llm_model: str = ""
+    llm_temperature: float = 0.2
+    llm_extra_prompt: str = ""
+    result_path: str = "data/results/latest.json"
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -19,7 +33,6 @@ class Settings(BaseSettings):
     @classmethod
     def settings_customise_sources(cls, settings_cls, **kwargs):  # type: ignore[override]
         """扩展配置源，支持从环境变量中扫描 STRATEGY_WEBHOOK_ 前缀的键。"""
-        from pydantic_settings import EnvSettingsSource
         import os
 
         sources = super().settings_customise_sources(settings_cls, **kwargs)
@@ -34,7 +47,6 @@ class Settings(BaseSettings):
 
         # 注入到初始化数据中（通过 init_kwargs source）
         if webhooks:
-            original_init = kwargs.get("init_settings")
             # 直接在 env 层注入，通过 model_post_init 处理
             os.environ.setdefault("_STRATEGY_WEBHOOKS_PARSED", "1")
             # 存储解析结果供 model_validator 使用
@@ -78,13 +90,8 @@ def get_settings() -> Settings:
     """返回全局 Settings 单例。
 
     首次调用时从环境变量或 .env 文件加载配置。
-    若必填字段（feishu_webhook_url）缺失，抛出 pydantic_core.ValidationError。
-
     Returns:
         Settings: 全局唯一的配置实例。
-
-    Raises:
-        pydantic_core.ValidationError: 当必填字段缺失或字段类型不匹配时抛出。
     """
     global _settings
     if _settings is None:

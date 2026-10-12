@@ -1,0 +1,66 @@
+#!/bin/bash
+
+PYTHON="/var/apps/python312/target/bin/python3"
+APP_DIR="${TRIM_APPDEST}/server"
+PID_FILE="${TRIM_PKGVAR}/service.pid"
+SERVICE_LOG="${TRIM_PKGVAR}/service.log"
+
+export PYTHONPATH="${APP_DIR}/vendor:${APP_DIR}"
+export DB_PATH="${TRIM_PKGVAR}/data/sequoia_v2.db"
+export SEQUOIA_DATA_DIR="${TRIM_PKGVAR}/data"
+export SEQUOIA_LOG_DIR="${TRIM_PKGVAR}/logs"
+export SEQUOIA_CONFIG_FILE="${TRIM_PKGVAR}/data/settings.json"
+export SEQUOIA_RESULT_PATH="${TRIM_PKGVAR}/data/results/latest.json"
+export DASHBOARD_PORT="18188"
+export TZ="Asia/Shanghai"
+
+is_running() {
+    if [ ! -r "${PID_FILE}" ]; then
+        return 1
+    fi
+    pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+    [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null
+}
+
+case "$1" in
+start)
+    if is_running; then
+        exit 0
+    fi
+    mkdir -p "${TRIM_PKGVAR}/data" "${TRIM_PKGVAR}/logs"
+    cd "${APP_DIR}" || exit 1
+    nohup "${PYTHON}" -m sequoia_x.service >>"${SERVICE_LOG}" 2>&1 &
+    echo "$!" >"${PID_FILE}"
+    sleep 2
+    if ! is_running; then
+        echo "Sequoia-X 启动失败，请检查 ${SERVICE_LOG}" >"${TRIM_TEMP_LOGFILE}"
+        exit 1
+    fi
+    ;;
+stop)
+    if is_running; then
+        pid=$(head -n 1 "${PID_FILE}" | tr -d '[:space:]')
+        kill -TERM "${pid}" 2>/dev/null || true
+        count=0
+        while kill -0 "${pid}" 2>/dev/null && [ "${count}" -lt 15 ]; do
+            sleep 1
+            count=$((count + 1))
+        done
+        if kill -0 "${pid}" 2>/dev/null; then
+            kill -KILL "${pid}" 2>/dev/null || true
+        fi
+    fi
+    rm -f "${PID_FILE}"
+    ;;
+status)
+    if is_running; then
+        exit 0
+    fi
+    rm -f "${PID_FILE}"
+    exit 3
+    ;;
+*)
+    echo "未知操作：$1" >"${TRIM_TEMP_LOGFILE}"
+    exit 1
+    ;;
+esac

@@ -1,0 +1,16 @@
+{
+  ".url": {
+    "fn-sequoia-x.main": {
+      "title": "Sequoia-X",
+      "icon": "images/icon_{0}.png",
+      "type": "url",
+      "protocol": "http",
+      "port": "18188",
+      "url": "/",
+      "allUsers": false,
+      "control": {
+        "accessPerm": "readonly"
+      }
+    }
+  }
+}

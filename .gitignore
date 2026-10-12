@@ -1,5 +1,6 @@
 # Python 缓存
 __pycache__/
+.DS_Store
 *.pyc
 *.pyo
 *.pyd
@@ -26,6 +27,8 @@ data/*.db
 *.egg-info/
 dist/
 build/
+*.fpk
+fnos/app/server/
 
 # 测试与工具缓存
 .pytest_cache/
