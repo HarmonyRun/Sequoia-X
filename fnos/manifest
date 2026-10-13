@@ -1,5 +1,5 @@
 appname               = fn-sequoia-x
-version               = 2.3.3
+version               = 2.3.4
 display_name          = Sequoia-X
 desc                  = A 股量化选股系统，自动同步行情、运行多种策略并通过飞书机器人推送结果。
 platform              = x86

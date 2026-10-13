@@ -106,7 +106,11 @@ class AkShareProvider:
                 )
                 if raw.empty:
                     return _finish_frame(raw)
-                frame = raw.rename(columns={"amount": "turnover"})
+                # Sina currently returns both ``amount`` (成交额) and ``turnover``
+                # (换手率). Renaming amount would create duplicate turnover columns,
+                # which makes pandas.to_numeric receive a DataFrame and fail.
+                frame = raw.copy()
+                frame["turnover"] = raw["amount"]
             else:
                 raise ProviderError(f"unsupported AkShare provider: {self.name}")
         except Exception as exc:
@@ -210,23 +214,27 @@ class ProviderPool:
 
     def fetch(self, symbol: str, start: str, end: str) -> tuple[pd.DataFrame, str, list[str]]:
         errors: list[str] = []
-        attempts = len(self.providers) if self.automatic else 3
-        for attempt in range(attempts):
+        provider_attempts = len(self.providers) if self.automatic else 1
+        retries_per_provider = 2 if self.automatic else 3
+        for attempt in range(provider_attempts):
             provider = self.providers[self.index]
-            try:
-                frame = provider.fetch_history(symbol, start, end)
-                if frame.empty and self.automatic and attempt < attempts - 1:
-                    errors.append(f"{provider.name}: empty response")
-                    self.index = (self.index + 1) % len(self.providers)
-                    continue
-                return frame, provider.name, errors
-            except ProviderError as exc:
-                errors.append(str(exc))
-                provider.close()
-                if self.automatic:
-                    self.index = (self.index + 1) % len(self.providers)
-                elif attempt < attempts - 1:
-                    time.sleep(2 ** attempt)
+            last_error: ProviderError | None = None
+            for retry in range(retries_per_provider):
+                try:
+                    frame = provider.fetch_history(symbol, start, end)
+                    if frame.empty and self.automatic and attempt < provider_attempts - 1:
+                        errors.append(f"{provider.name}: empty response")
+                        break
+                    return frame, provider.name, errors
+                except ProviderError as exc:
+                    last_error = exc
+                    provider.close()
+                    if retry < retries_per_provider - 1:
+                        time.sleep(1 + retry)
+            if last_error is not None:
+                errors.append(str(last_error))
+            if self.automatic:
+                self.index = (self.index + 1) % len(self.providers)
         raise ProviderError(" | ".join(errors))
 
     def close(self) -> None:

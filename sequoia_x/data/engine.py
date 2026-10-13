@@ -131,7 +131,10 @@ class DataEngine:
                 try:
                     frame, source, errors = pool.fetch(symbol, start, today_str)
                     for error in errors:
-                        logger.warning("[%s] 数据源异常，自动切换: %s", symbol, error)
+                        if error.endswith(": empty response"):
+                            logger.info("[%s] 当前数据源无该区间数据，继续尝试: %s", symbol, error)
+                        else:
+                            logger.warning("[%s] 数据源请求失败，自动切换: %s", symbol, error)
                     previous_source = self._get_symbol_source(symbol)
                     replace_history = bool(last_date and previous_source != source)
                     if replace_history and not frame.empty:
@@ -145,7 +148,10 @@ class DataEngine:
                             symbol, self.start_date, today_str
                         )
                         for error in additional_errors:
-                            logger.warning("[%s] 完整区间切源: %s", symbol, error)
+                            if error.endswith(": empty response"):
+                                logger.info("[%s] 完整区间当前源无数据: %s", symbol, error)
+                            else:
+                                logger.warning("[%s] 完整区间数据源请求失败: %s", symbol, error)
                     if frame.empty:
                         skipped += 1
                     else:
