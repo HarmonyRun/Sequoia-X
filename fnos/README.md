@@ -1,6 +1,6 @@
 # Sequoia-X for fnOS
 
-> 本 fnOS 应用由 [HarmonyRun/Sequoia-X](https://github.com/HarmonyRun/Sequoia-X) 社区分支维护，
+> 本 fnOS 应用由 [HarmonyRun/Sequoia-X-fnOS](https://github.com/HarmonyRun/Sequoia-X-fnOS) 社区分支维护，
 > 基于原作者 [sngyai/Sequoia-X](https://github.com/sngyai/Sequoia-X) 二次开发，非原作者官方发行版。
 
 此目录是 Sequoia-X 的飞牛 fnOS 原生应用包装。应用使用飞牛提供的 Python 3.12 运行时，x86 Linux 第三方依赖已内置在 FPK 中，不使用 Docker，也不在安装时访问 PyPI。安装后会运行一个定时选股服务和轻量管理页，行情数据库与日志保存在 fnOS 应用数据目录，升级时不会丢失。

@@ -48,7 +48,7 @@ python main.py --update-only # 仅回填当日最新行情
 
 构建前需要安装飞牛官方 `fnpack` 1.2.3、`uv` 和 Python 3.12。脚本会生成内置 Linux x86_64 依赖的原生安装包。详细说明见 [`fnos/README.md`](fnos/README.md)。
 
-预编译安装包请从 [GitHub Releases](https://github.com/HarmonyRun/Sequoia-X/releases) 下载。当前仅提供
+预编译安装包请从 [GitHub Releases](https://github.com/HarmonyRun/Sequoia-X-fnOS/releases) 下载。当前仅提供
 x86_64 版本，安装时请在飞牛应用中心启用“手动安装应用”，上传 `.fpk` 文件。
 
 ## 上游关系与二次开发声明
